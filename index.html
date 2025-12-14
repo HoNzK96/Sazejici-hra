@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="cs">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sázející hra</title>
+
+<style>
+body{
+    background:white;
+    font-family:Arial,sans-serif;
+    margin:0;
+    padding:20px;
+    display:flex;
+    justify-content:center;
+}
+.app-container{
+    width:100%;
+    max-width:420px;
+    background:#4b2e14;
+    color:white;
+    padding:20px;
+    border-radius:12px;
+    border:2px solid #8a5a2c;
+    box-shadow:0 10px 30px rgba(0,0,0,0.4);
+}
+input,select,button{
+    width:100%;
+    padding:12px;
+    margin:8px 0;
+    font-size:16px;
+    border-radius:6px;
+    box-sizing:border-box;
+}
+button{
+    background:#8a5a2c;
+    color:white;
+    border:none;
+    cursor:pointer;
+}
+button:hover{background:#a56c33;}
+.hidden{display:none;}
+hr{margin:20px 0;}
+small{opacity:0.85;}
+h1,h2,h3{text-align:center;}
+</style>
+</head>
+
+<body>
+
+<div class="app-container">
+
+<h1>🎲 Sázející hra</h1>
+
+<div id="login-screen">
+    <input id="nickname" placeholder="Zadej přezdívku">
+    <button onclick="login()">Pokračovat</button>
+</div>
+
+<div id="player-screen" class="hidden">
+    <h2>Hráč</h2>
+    <select id="game-select"></select>
+
+    <h3>Sázka</h3>
+    <input id="gold" type="number" min="0" placeholder="Zlaté">
+    <input id="silver" type="number" min="0" placeholder="Stříbrné">
+    <input id="copper" type="number" min="0" placeholder="Měděné">
+
+    <button onclick="playerRoll()">Hodit kostkou 🎲</button>
+    <div id="player-result"></div>
+</div>
+
+<div id="admin-screen" class="hidden">
+    <h2>Admin – Správa her</h2>
+
+    <h3>Vytvořit hru</h3>
+    <input id="new-game-name" placeholder="Název hry">
+    <input id="new-game-odds" type="number" step="0.01" min="1" placeholder="Kurz (např. 1.15)">
+    <button onclick="createGame()">Vytvořit hru</button>
+
+    <hr>
+
+    <h3>Úprava her</h3>
+    <select id="admin-game-select"></select>
+    <button onclick="renameGame()">Přejmenovat hru</button>
+    <button onclick="editOdds()">Upravit kurz</button>
+    <button onclick="deleteGame()">Smazat hru</button>
+
+    <hr>
+
+    <h3>Průběh hry</h3>
+    <button onclick="showBets()">Zobrazit sázky hráčů</button>
+    <button onclick="adminRoll()">Admin hodí kostkou 🎲</button>
+
+    <div id="admin-output"></div>
+</div>
+
+</div>
+
+<script>
+/* ===== NASTAVENÍ JSONBIN.IO ===== */
+const BIN_ID = "TVŮJ_BIN_ID"; // nahraď svým bin ID
+const BIN_SECRET_KEY = "TVŮJ_SECRET_KEY"; // volitelné, pokud máš privátní bin
+const BIN_URL = `https://api.jsonbin.io/v3/b/${BIN_ID}`;
+
+// lokální kopie pro rychlou práci
+let db = { games:{} };
+let nickname = "";
+
+/* ===== HELPERS ===== */
+function toCopper(g,s,c){ return g*100 + s*10 + c; }
+function fromCopper(v){
+    let g=Math.floor(v/100);
+    let s=Math.floor((v%100)/10);
+    let c=v%10;
+    return `Z${g} / S${s} / M${c}`;
+}
+function formatDate(ts){
+    const d=new Date(ts);
+    return d.toLocaleDateString("cs-CZ")+" "+d.toLocaleTimeString("cs-CZ");
+}
+
+/* ===== JSONBIN OPERACE ===== */
+async function loadDB(){
+    try {
+        const res = await fetch(BIN_URL + "/latest", {
+            headers: { "X-Master-Key": BIN_SECRET_KEY }
+        });
+        const data = await res.json();
+        db = data.record || { games:{} };
+        refreshSelects();
+    } catch(e){
+        console.error("Nepodařilo se načíst DB:", e);
+    }
+}
+
+async function saveDB(){
+    try {
+        await fetch(BIN_URL, {
+            method:"PUT",
+            headers:{
+                "Content-Type":"application/json",
+                "X-Master-Key": BIN_SECRET_KEY
+            },
+            body: JSON.stringify(db)
+        });
+    } catch(e){
+        console.error("Nepodařilo se uložit DB:", e);
+    }
+}
+
+/* ===== LOGIN ===== */
+function login(){
+    nickname=document.getElementById("nickname").value.trim();
+    if(!nickname) return alert("Zadej přezdívku");
+
+    document.getElementById("login-screen").classList.add("hidden");
+
+    if(nickname.toLowerCase()==="adminif"){
+        document.getElementById("admin-screen").classList.remove("hidden");
+    } else {
+        document.getElementById("player-screen").classList.remove("hidden");
+    }
+    refreshSelects();
+}
+
+/* ===== SELECTY ===== */
+function refreshSelects(){
+    const ps=document.getElementById("game-select");
+    const as=document.getElementById("admin-game-select");
+    ps.innerHTML=""; as.innerHTML="";
+    for(let g in db.games){
+        ps.innerHTML+=`<option value="${g}">${g} (kurz ${db.games[g].odds})</option>`;
+        as.innerHTML+=`<option value="${g}">${g}</option>`;
+    }
+}
+
+/* ===== ADMIN – HRY ===== */
+function createGame(){
+    const name=document.getElementById("new-game-name").value.trim();
+    const odds=parseFloat(document.getElementById("new-game-odds").value);
+    if(!name || !odds || odds<1) return alert("Vyplň název a kurz");
+
+    db.games[name]={ odds:odds, bets:[], adminRoll:null };
+    saveDB(); refreshSelects();
+}
+
+function renameGame(){
+    const oldName=document.getElementById("admin-game-select").value;
+    const newName=prompt("Nový název hry:", oldName);
+    if(!newName || db.games[newName]) return alert("Neplatný název");
+
+    db.games[newName]=db.games[oldName];
+    delete db.games[oldName];
+    saveDB(); refreshSelects();
+}
+
+function editOdds(){
+    const game=document.getElementById("admin-game-select").value;
+    const current=db.games[game].odds;
+    const newOdds=parseFloat(prompt("Nový kurz:", current));
+    if(!newOdds || newOdds<1) return alert("Neplatný kurz");
+
+    db.games[game].odds=newOdds;
+    saveDB(); refreshSelects();
+}
+
+function deleteGame(){
+    const g=document.getElementById("admin-game-select").value;
+    if(confirm(`Smazat hru "${g}"?`)){
+        delete db.games[g];
+        saveDB(); refreshSelects();
+        document.getElementById("admin-output").innerHTML="";
+    }
+}
+
+/* ===== ADMIN – PRŮBĚH ===== */
+function showBets(){
+    const g=db.games[document.getElementById("admin-game-select").value];
+    let out=`<h3>Sázky (kurz ${g.odds})</h3>`;
+    out+= g.adminRoll
+        ? `<p><strong>Admin hodil: ${g.adminRoll}</strong></p>`
+        : `<p><em>Admin zatím neházel</em></p>`;
+
+    if(!g.bets.length) out+="<p>Žádné sázky</p>";
+
+    g.bets.forEach(b=>{
+        out+=`
+        <p>
+        <strong>${b.player}</strong> | hod ${b.roll} |
+        sázka Z${b.bet.g}/S${b.bet.s}/M${b.bet.c}<br>
+        <small>📅 ${formatDate(b.time)}</small>
+        </p>`;
+    });
+    document.getElementById("admin-output").innerHTML=out;
+}
+
+function adminRoll(){
+    const g=db.games[document.getElementById("admin-game-select").value];
+    g.adminRoll=Math.floor(Math.random()*6)+1;
+    let out=`<h3>Admin hodil ${g.adminRoll}</h3>`;
+
+    g.bets.forEach(b=>{
+        let betC=toCopper(b.bet.g,b.bet.s,b.bet.c);
+        let res;
+        if(b.roll>g.adminRoll) res="🎉 Výhra "+fromCopper(Math.floor(betC*g.odds));
+        else if(b.roll===g.adminRoll) res="➖ Remíza – "+fromCopper(betC);
+        else res="❌ Prohra – "+fromCopper(betC);
+
+        out+=`<p>${b.player}: ${res}<br><small>📅 ${formatDate(b.time)}</small></p>`;
+    });
+    saveDB();
+    document.getElementById("admin-output").innerHTML=out;
+}
+
+/* ===== HRÁČ ===== */
+function playerRoll(){
+    const game=document.getElementById("game-select").value;
+    const roll=Math.floor(Math.random()*6)+1;
+
+    const g=+document.getElementById("gold").value||0;
+    const s=+document.getElementById("silver").value||0;
+    const c=+document.getElementById("copper").value||0;
+    if(g+s+c<=0) return alert("Musíš vsadit aspoň něco");
+
+    db.games[game].bets.push({
+        player:nickname,
+        roll,
+        bet:{g,s,c},
+        time:Date.now()
+    });
+    saveDB();
+
+    document.getElementById("player-result").innerText =
+        `Hodil jsi ${roll}. Sázka uložena.`;
+}
+
+/* ===== NAČTENÍ DAT PŘI STARTU ===== */
+loadDB();
+</script>
+
+</body>
+</html>
